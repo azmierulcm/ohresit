@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { 
   AreaChart, 
   Area, 
@@ -19,8 +20,11 @@ import {
   ArrowUpRight, 
   ArrowDownRight, 
   Calendar,
-  Filter
+  Filter,
+  Plus,
+  Scan
 } from "lucide-react";
+import { useUI } from '@/lib/context/UIContext';
 
 // Mock data for spending trends
 const trendData = [
@@ -43,6 +47,7 @@ const categoryData = [
 
 export default function AnalyticsDashboard() {
   const [timeframe, setTimeframe] = useState('Week');
+  const { openEntryModal } = useUI();
 
   return (
     <div className="max-w-4xl mx-auto p-5 pb-24 space-y-8">
@@ -68,6 +73,15 @@ export default function AnalyticsDashboard() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="flex gap-3 md:hidden mb-4">
+        <Button onClick={openEntryModal} variant="outline" className="flex-1 rounded-full border-zinc-200 shadow-sm">
+          <Plus className="mr-2 h-4 w-4" /> Add Income
+        </Button>
+        <Button onClick={openEntryModal} className="flex-1 rounded-full bg-emerald-600 hover:bg-emerald-700 shadow-md">
+          <Scan className="mr-2 h-4 w-4" /> Scan Receipt
+        </Button>
       </div>
 
       {/* Hero Stats */}
@@ -198,7 +212,7 @@ export default function AnalyticsDashboard() {
           <p className="text-zinc-500 text-sm mt-2 leading-relaxed">
             You spent <strong>RM 500</strong> on Shopping this week. Switching to generic brands could save you up to <strong>RM 120</strong> next month.
           </p>
-          <button className="mt-8 w-full py-4 bg-zinc-100 hover:bg-zinc-200 transition-colors rounded-2xl font-bold text-zinc-900 text-sm">
+          <button onClick={openEntryModal} className="mt-8 w-full py-4 bg-zinc-100 hover:bg-zinc-200 transition-colors rounded-2xl font-bold text-zinc-900 text-sm">
              Set Budget Goal
           </button>
         </Card>
