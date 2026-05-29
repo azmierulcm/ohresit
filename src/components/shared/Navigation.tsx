@@ -18,7 +18,7 @@ const navItems = [
   { name: 'Tax', icon: ShieldCheck, href: '/compliance' },
 ];
 
-export default function Navigation() {
+export default function Navigation({ onOpenAdd }: { onOpenAdd: () => void }) {
   return (
     <>
       {/* Mobile Bottom Navigation */}
@@ -36,7 +36,10 @@ export default function Navigation() {
           </Link>
         ))}
         {/* Mobile Quick Add Button */}
-        <button className="absolute -top-6 left-1/2 -translate-x-1/2 bg-zinc-900 text-white p-4 rounded-full shadow-xl shadow-zinc-200 active:scale-95 transition-transform">
+        <button 
+          onClick={onOpenAdd}
+          className="absolute -top-6 left-1/2 -translate-x-1/2 bg-zinc-900 text-white p-4 rounded-full shadow-xl shadow-zinc-200 active:scale-95 transition-transform"
+        >
           <Plus className="h-6 w-6" />
         </button>
       </nav>
@@ -64,7 +67,10 @@ export default function Navigation() {
         </div>
 
         <div className="pt-8 border-t border-zinc-50 space-y-4">
-          <button className="w-full bg-zinc-900 text-white py-4 rounded-[2rem] font-bold flex items-center justify-center gap-2 shadow-lg shadow-zinc-100 hover:bg-zinc-800 transition-all">
+          <button 
+            onClick={onOpenAdd}
+            className="w-full bg-zinc-900 text-white py-4 rounded-[2rem] font-bold flex items-center justify-center gap-2 shadow-lg shadow-zinc-100 hover:bg-zinc-800 transition-all"
+          >
             <Plus className="h-4 w-4" /> Quick Add
           </button>
           
