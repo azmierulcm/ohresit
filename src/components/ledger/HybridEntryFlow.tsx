@@ -62,31 +62,48 @@ export default function HybridEntryFlow({ onClose }: { onClose: () => void }) {
     setMode("scan");
     setStep("SCANNING");
 
-    const formData = new FormData();
-    formData.append("receipt", file);
+    try {
+      const formData = new FormData();
+      formData.append("receipt", file);
 
-    const result = await analyzeReceiptAction(formData, user?.uid || "");
+      const result = await analyzeReceiptAction(formData, user?.uid || "");
 
-    if (!result.success) {
-      alert("Scanning failed: " + result.error);
-      setStep("CHOOSE");
-      return;
+      if (!result.success) {
+        // OCR failed — still let user fill in manually
+        setReviewData({
+          vendor: "",
+          amount: "",
+          date: new Date().toISOString().split("T")[0],
+          category: "Other",
+          notes: "",
+        });
+        setStep("REVIEW");
+        return;
+      }
+
+      const { ocr, receipt } = result;
+      setReviewData({
+        vendor: ocr.vendor,
+        amount: ocr.amount > 0 ? ocr.amount.toString() : "",
+        date: ocr.date.split("T")[0],
+        category: ocr.category,
+        notes: "",
+        ocr,
+        receipt,
+      });
+      setStep("REVIEW");
+    } catch (err) {
+      console.error("analyzeReceiptAction threw:", err);
+      // Fallback to manual entry instead of hanging
+      setReviewData({
+        vendor: "",
+        amount: "",
+        date: new Date().toISOString().split("T")[0],
+        category: "Other",
+        notes: "",
+      });
+      setStep("REVIEW");
     }
-
-    const { ocr, receipt } = result;
-
-    // Pre-fill review form with OCR data
-    setReviewData({
-      vendor: ocr.vendor,
-      amount: ocr.amount.toString(),
-      date: ocr.date.split("T")[0],
-      category: ocr.category,
-      notes: "",
-      ocr,
-      receipt,
-    });
-
-    setStep("REVIEW");
   };
 
   // ── Manual flow ───────────────────────────────────────────────────────────
@@ -113,26 +130,30 @@ export default function HybridEntryFlow({ onClose }: { onClose: () => void }) {
 
     setSaving(true);
 
-    const result = await saveTransactionAction({
-      userId: user?.uid || "",
-      vendor: reviewData.vendor,
-      amount: parseFloat(reviewData.amount),
-      date: reviewData.date,
-      category: reviewData.category,
-      notes: reviewData.notes,
-      receipt: reviewData.receipt || { storagePath: "", downloadUrl: "" },
-      rawText: reviewData.ocr?.rawText || "",
-      confidence: reviewData.ocr?.confidence || 0,
-    });
+    try {
+      const result = await saveTransactionAction({
+        userId: user?.uid || "",
+        vendor: reviewData.vendor,
+        amount: parseFloat(reviewData.amount),
+        date: reviewData.date,
+        category: reviewData.category,
+        notes: reviewData.notes,
+        receipt: reviewData.receipt || { storagePath: "", downloadUrl: "" },
+        rawText: reviewData.ocr?.rawText || "",
+        confidence: reviewData.ocr?.confidence || 0,
+      });
 
-    setSaving(false);
-
-    if (!result.success) {
-      alert("Failed to save: " + result.error);
-      return;
+      if (!result.success) {
+        alert("Failed to save: " + result.error);
+        return;
+      }
+      onClose();
+    } catch (err) {
+      alert("Unexpected error saving transaction. Please try again.");
+      console.error("saveTransactionAction threw:", err);
+    } finally {
+      setSaving(false);
     }
-
-    onClose();
   };
 
   const updateField = (field: keyof ReviewData, value: string) =>

@@ -105,31 +105,35 @@ export async function saveTransactionAction(
   input: SaveTransactionInput
 ): Promise<{ success: true; transactionId: string } | { success: false; error: string }> {
   try {
-    const receiptData: Receipt = {
-      storagePath: input.receipt.storagePath,
-      downloadUrl: input.receipt.downloadUrl,
-      format: "avif",
-      ocrMetadata: {
-        rawText: input.rawText,
-        confidence: input.confidence,
-      },
-    };
+    const hasReceipt = !!input.receipt?.storagePath;
+
+    const receiptData: Receipt | null = hasReceipt
+      ? {
+          storagePath: input.receipt.storagePath,
+          downloadUrl: input.receipt.downloadUrl,
+          format: "avif",
+          ocrMetadata: {
+            rawText: input.rawText,
+            confidence: input.confidence,
+          },
+        }
+      : null;
 
     const transactionRef = db.collection("transactions").doc();
-    await transactionRef.set({
+    const txData: any = {
       userId: input.userId,
       type: "expense",
       category: input.category,
       amount: Number(input.amount),
       date: new Date(input.date),
       vendor: input.vendor,
-      description: input.notes || `Scanned receipt from ${input.vendor}`,
-      receipt: receiptData,
-      compliance: {
-        isVerified: false,
-      },
+      description: input.notes || `${input.vendor} — ${input.category}`,
+      compliance: { isVerified: false },
       createdAt: new Date(),
-    });
+    };
+    if (receiptData) txData.receipt = receiptData;
+
+    await transactionRef.set(txData);
 
     return { success: true, transactionId: transactionRef.id };
   } catch (error: any) {
@@ -141,6 +145,18 @@ export async function saveTransactionAction(
 // ─── Gemini Vision OCR ───────────────────────────────────────────────────────
 
 async function runGeminiOcr(jpegBuffer: Buffer): Promise<OcrResult> {
+  if (!process.env.GEMINI_API_KEY) {
+    console.warn("[OCR] GEMINI_API_KEY not set — returning empty OCR result for manual review.");
+    return {
+      vendor: "",
+      amount: 0,
+      date: new Date().toISOString(),
+      category: "Other",
+      rawText: "",
+      confidence: 0,
+    };
+  }
+
   const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
   const prompt = `You are an expert at reading Malaysian receipts. Analyze this receipt image and extract the data below.

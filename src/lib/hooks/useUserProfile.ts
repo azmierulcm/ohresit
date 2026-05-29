@@ -12,13 +12,26 @@ export function useUserProfile() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setLoading(false);
+      setProfile(null);
+      return;
+    }
+
+    setLoading(true);
 
     const ref = doc(db, "users", user.uid);
-    const unsub = onSnapshot(ref, (snap) => {
-      setProfile(snap.exists() ? (snap.data() as UserProfile) : null);
-      setLoading(false);
-    });
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        setProfile(snap.exists() ? (snap.data() as UserProfile) : null);
+        setLoading(false);
+      },
+      (error) => {
+        console.error('useUserProfile onSnapshot error:', error);
+        setLoading(false);
+      }
+    );
 
     return unsub;
   }, [user]);

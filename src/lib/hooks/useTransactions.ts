@@ -21,7 +21,13 @@ export function useTransactions(limitCount = 50) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setLoading(false);
+      setTransactions([]);
+      return;
+    }
+
+    setLoading(true);
 
     const q = query(
       collection(db, 'transactions'),
@@ -30,11 +36,18 @@ export function useTransactions(limitCount = 50) {
       limit(limitCount)
     );
 
-    const unsub = onSnapshot(q, (snap) => {
-      const data = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() } as Transaction));
-      setTransactions(data);
-      setLoading(false);
-    });
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const data = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() } as Transaction));
+        setTransactions(data);
+        setLoading(false);
+      },
+      (error) => {
+        console.error('Firestore onSnapshot error:', error);
+        setLoading(false); // stop spinner even if read fails
+      }
+    );
 
     return unsub;
   }, [user, limitCount]);
