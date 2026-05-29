@@ -6,8 +6,8 @@ import LayoutWrapper from './layout-wrapper';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'FinVault - Budget & E-Invois',
-  description: 'Airbnb-style Budget and E-Invois Tracker',
+  title: 'Ohresit - Budget & E-Invois',
+  description: 'Mobile-first Budget and E-Invois Tracker for Malaysia',
 };
 
 export default function RootLayout({

@@ -30,7 +30,14 @@ export interface UserProfile {
   displayName: string;
   settings: {
     currency: string;
-    taxId?: string;
-    businessRegNo?: string;
+    taxId?: string;        // TIN e.g. C210928370
+    businessRegNo?: string; // BRN e.g. 202401029384
+  };
+  lhdnCredentials?: {
+    clientId: string;
+    clientSecret: string;
+    isLinked: boolean;
+    linkedAt?: any;   // Firestore Timestamp
+    lastSynced?: any; // Firestore Timestamp
   };
 }

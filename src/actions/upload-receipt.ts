@@ -3,86 +3,190 @@
 import sharp from "sharp";
 import { storage, db } from "@/lib/firebase/admin";
 import { nanoid } from "nanoid";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Receipt } from "@/types";
 
-export async function processReceiptAction(formData: FormData, userId: string) {
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+
+// ─── Types ─────────────────────────────────────────────────────────────────
+
+export interface OcrResult {
+  vendor: string;
+  amount: number;
+  date: string;        // ISO string
+  category: string;
+  rawText: string;
+  confidence: number;
+}
+
+export interface AnalyzeResult {
+  success: true;
+  ocr: OcrResult;
+  receipt: {
+    storagePath: string;
+    downloadUrl: string;
+  };
+}
+
+export interface SaveTransactionInput {
+  userId: string;
+  vendor: string;
+  amount: number;
+  date: string;
+  category: string;
+  notes: string;
+  receipt: {
+    storagePath: string;
+    downloadUrl: string;
+  };
+  rawText: string;
+  confidence: number;
+}
+
+// ─── Step 1: Analyze receipt (OCR + Storage, no Firestore write) ─────────────
+
+export async function analyzeReceiptAction(
+  formData: FormData,
+  userId: string
+): Promise<AnalyzeResult | { success: false; error: string }> {
   try {
     const file = formData.get("receipt") as File;
-    if (!file) throw new Error("No file uploaded");
+    if (!file) throw new Error("No file uploaded.");
 
-    const buffer = Buffer.from(await file.arrayBuffer());
+    const originalBuffer = Buffer.from(await file.arrayBuffer());
 
-    // 1. Convert to AVIF & Compress using Sharp
-    // Optimized for OCR readability while keeping file size minimal
-    const avifBuffer = await sharp(buffer)
-      .avif({ quality: 50, effort: 4 }) 
-      .resize(1600, null, { withoutEnlargement: true }) // Larger for OCR clarity
+    // Convert to JPEG for Gemini Vision (AVIF not supported by Gemini)
+    const jpegBuffer = await sharp(originalBuffer)
+      .jpeg({ quality: 85 })
+      .resize(1600, null, { withoutEnlargement: true })
       .toBuffer();
 
+    // Convert to AVIF for Firebase Storage (smaller, OCR-optimised)
+    const avifBuffer = await sharp(originalBuffer)
+      .avif({ quality: 50, effort: 4 })
+      .resize(1600, null, { withoutEnlargement: true })
+      .toBuffer();
+
+    // Upload AVIF to Firebase Storage
     const fileId = nanoid();
     const fileName = `receipts/${userId}/${fileId}.avif`;
     const fileRef = storage.bucket().file(fileName);
 
-    // 2. Save to Firebase Storage
-    await fileRef.save(avifBuffer, { 
+    await fileRef.save(avifBuffer, {
       contentType: "image/avif",
       metadata: {
-        cacheControl: 'public, max-age=31536000',
-        userId: userId,
-      }
+        cacheControl: "public, max-age=31536000",
+        userId,
+      },
     });
 
-    const [url] = await fileRef.getSignedUrl({
+    const [downloadUrl] = await fileRef.getSignedUrl({
       action: "read",
       expires: "03-01-2500",
     });
 
-    // 3. Mock OCR Pipeline
-    // In a real scenario, you'd call Google Vision or OpenAI here
-    const mockOcrData = {
-      amount: 45.50,
-      vendor: "Village Grocer",
-      date: new Date().toISOString(),
-      category: "Groceries",
-      confidence: 0.98,
-      rawText: "VILLAGE GROCER\nSTREET NAME\nTOTAL: RM 45.50\nCASH: 50.00\nCHANGE: 4.50"
-    };
+    // Run Gemini Vision OCR on the JPEG
+    const ocr = await runGeminiOcr(jpegBuffer);
 
+    return {
+      success: true,
+      ocr,
+      receipt: { storagePath: fileName, downloadUrl },
+    };
+  } catch (error: any) {
+    console.error("analyzeReceiptAction error:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+// ─── Step 2: Save confirmed transaction to Firestore ─────────────────────────
+
+export async function saveTransactionAction(
+  input: SaveTransactionInput
+): Promise<{ success: true; transactionId: string } | { success: false; error: string }> {
+  try {
     const receiptData: Receipt = {
-      storagePath: fileName,
-      downloadUrl: url,
-      format: 'avif',
+      storagePath: input.receipt.storagePath,
+      downloadUrl: input.receipt.downloadUrl,
+      format: "avif",
       ocrMetadata: {
-        rawText: mockOcrData.rawText,
-        confidence: mockOcrData.confidence
-      }
+        rawText: input.rawText,
+        confidence: input.confidence,
+      },
     };
 
-    // 4. Create Transaction Record in Firestore
-    const transactionRef = db.collection('transactions').doc();
+    const transactionRef = db.collection("transactions").doc();
     await transactionRef.set({
-      userId,
-      type: 'expense',
-      category: mockOcrData.category,
-      amount: mockOcrData.amount,
-      date: new Date(mockOcrData.date),
-      vendor: mockOcrData.vendor,
-      description: `Scanned from receipt at ${mockOcrData.vendor}`,
+      userId: input.userId,
+      type: "expense",
+      category: input.category,
+      amount: Number(input.amount),
+      date: new Date(input.date),
+      vendor: input.vendor,
+      description: input.notes || `Scanned receipt from ${input.vendor}`,
       receipt: receiptData,
       compliance: {
-        isVerified: true,
+        isVerified: false,
       },
       createdAt: new Date(),
     });
 
-    return {
-      success: true,
-      transactionId: transactionRef.id,
-      data: mockOcrData,
-      url,
-    };
+    return { success: true, transactionId: transactionRef.id };
   } catch (error: any) {
-    console.error("Receipt processing error:", error);
+    console.error("saveTransactionAction error:", error);
     return { success: false, error: error.message };
+  }
+}
+
+// ─── Gemini Vision OCR ───────────────────────────────────────────────────────
+
+async function runGeminiOcr(jpegBuffer: Buffer): Promise<OcrResult> {
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+  const prompt = `You are an expert at reading Malaysian receipts. Analyze this receipt image and extract the data below.
+
+Respond with ONLY valid JSON matching this exact shape (no markdown, no code block):
+{
+  "vendor": "business name shown on receipt",
+  "amount": <total amount as a number, MYR, no currency symbol>,
+  "date": "<ISO 8601 date string, e.g. 2026-05-30T00:00:00.000Z>",
+  "category": "<one of: Food & Drink, Transport, Utilities, Shopping, Healthcare, Entertainment, Software, Other>",
+  "rawText": "<all visible text from the receipt joined by newlines>",
+  "confidence": <number 0-1 representing your confidence>
+}
+
+Rules:
+- amount: use the TOTAL / JUMLAH / GRAND TOTAL line, not subtotal
+- date: if not visible, use today ${new Date().toISOString().split("T")[0]}
+- vendor: use the business name at the top of the receipt
+- category: pick the most appropriate from the list`;
+
+  const result = await model.generateContent([
+    { text: prompt },
+    {
+      inlineData: {
+        mimeType: "image/jpeg",
+        data: jpegBuffer.toString("base64"),
+      },
+    },
+  ]);
+
+  const text = result.response.text().trim();
+
+  try {
+    // Strip any accidental markdown code fences
+    const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    return JSON.parse(cleaned);
+  } catch {
+    // Fallback if Gemini returns malformed JSON
+    console.error("Gemini OCR parse error. Raw response:", text);
+    return {
+      vendor: "Unknown Vendor",
+      amount: 0,
+      date: new Date().toISOString(),
+      category: "Other",
+      rawText: text,
+      confidence: 0.1,
+    };
   }
 }

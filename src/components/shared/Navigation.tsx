@@ -53,7 +53,7 @@ export default function Navigation() {
           <div className="w-10 h-10 bg-emerald-600 rounded-2xl flex items-center justify-center">
             <ShieldCheck className="h-6 w-6 text-white" />
           </div>
-          <span className="text-xl font-bold tracking-tight text-zinc-900 italic">FinVault.</span>
+          <span className="text-xl font-bold tracking-tight text-zinc-900 italic">Ohresit.</span>
         </div>
 
         <div className="flex-1 space-y-2">
