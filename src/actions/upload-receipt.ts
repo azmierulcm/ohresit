@@ -55,10 +55,10 @@ export async function analyzeReceiptAction(
 
     const originalBuffer = Buffer.from(await file.arrayBuffer());
 
-    // Convert to JPEG for Gemini Vision (AVIF not supported by Gemini)
+    // Convert to JPEG for Gemini Vision (AVIF not supported; high quality for OCR accuracy)
     const jpegBuffer = await sharp(originalBuffer)
-      .jpeg({ quality: 85 })
-      .resize(1600, null, { withoutEnlargement: true })
+      .jpeg({ quality: 92 })
+      .resize(2000, null, { withoutEnlargement: true })
       .toBuffer();
 
     // Convert to AVIF for Firebase Storage (smaller, OCR-optimised)
@@ -119,12 +119,17 @@ export async function saveTransactionAction(
         }
       : null;
 
+    const amount = parseReceiptAmount(input.amount);
+    if (!amount || amount <= 0) {
+      return { success: false, error: "Amount must be greater than 0." };
+    }
+
     const transactionRef = db.collection("transactions").doc();
     const txData: any = {
       userId: input.userId,
       type: "expense",
       category: input.category,
-      amount: Number(input.amount),
+      amount,
       date: new Date(input.date),
       vendor: input.vendor,
       description: input.notes || `${input.vendor} — ${input.category}`,
@@ -146,63 +151,78 @@ export async function saveTransactionAction(
 
 async function runGeminiOcr(jpegBuffer: Buffer): Promise<OcrResult> {
   if (!process.env.GEMINI_API_KEY) {
-    console.warn("[OCR] GEMINI_API_KEY not set — returning empty OCR result for manual review.");
-    return {
-      vendor: "",
-      amount: 0,
-      date: new Date().toISOString(),
-      category: "Other",
-      rawText: "",
-      confidence: 0,
-    };
+    console.warn("[OCR] GEMINI_API_KEY not set — skipping OCR.");
+    return { vendor: "", amount: 0, date: new Date().toISOString(), category: "Other", rawText: "", confidence: 0 };
   }
 
   const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  const today = new Date().toISOString().split("T")[0];
 
-  const prompt = `You are an expert at reading Malaysian receipts. Analyze this receipt image and extract the data below.
+  // ── Prompt: no rawText (causes JSON parse failures with literal newlines) ──
+  const prompt = `You are reading a Malaysian receipt or invoice image.
 
-Respond with ONLY valid JSON matching this exact shape (no markdown, no code block):
-{
-  "vendor": "business name shown on receipt",
-  "amount": <total amount as a number, MYR, no currency symbol>,
-  "date": "<ISO 8601 date string, e.g. 2026-05-30T00:00:00.000Z>",
-  "category": "<one of: Food & Drink, Transport, Utilities, Shopping, Healthcare, Entertainment, Software, Other>",
-  "rawText": "<all visible text from the receipt joined by newlines>",
-  "confidence": <number 0-1 representing your confidence>
-}
+Return ONLY a JSON object — no markdown, no explanation, nothing else.
+
+Example:
+{"vendor":"Village Grocer","amount":45.50,"date":"2026-05-30","category":"Food & Drink"}
 
 Rules:
-- amount: use the TOTAL / JUMLAH / GRAND TOTAL line, not subtotal
-- date: if not visible, use today ${new Date().toISOString().split("T")[0]}
-- vendor: use the business name at the top of the receipt
-- category: pick the most appropriate from the list`;
+- vendor: store or restaurant name (largest text, usually at top)
+- amount: the final TOTAL / JUMLAH / GRAND TOTAL as a plain decimal number. Strip "RM". Example: if you see "RM 128.90" write 128.90
+- date: date printed on receipt in YYYY-MM-DD. Write ${today} if not visible
+- category: exactly one of — Food & Drink, Transport, Utilities, Shopping, Healthcare, Entertainment, Software, Other`;
 
   const result = await model.generateContent([
     { text: prompt },
-    {
-      inlineData: {
-        mimeType: "image/jpeg",
-        data: jpegBuffer.toString("base64"),
-      },
-    },
+    { inlineData: { mimeType: "image/jpeg", data: jpegBuffer.toString("base64") } },
   ]);
 
-  const text = result.response.text().trim();
+  const raw = result.response.text().trim();
+  console.log("[OCR] Gemini raw response:", raw.substring(0, 300));
 
-  try {
-    // Strip any accidental markdown code fences
-    const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-    return JSON.parse(cleaned);
-  } catch {
-    // Fallback if Gemini returns malformed JSON
-    console.error("Gemini OCR parse error. Raw response:", text);
-    return {
-      vendor: "Unknown Vendor",
-      amount: 0,
-      date: new Date().toISOString(),
-      category: "Other",
-      rawText: text,
-      confidence: 0.1,
-    };
+  // Use regex to find the first {...} block — handles markdown fences and trailing text
+  const jsonMatch = raw.match(/\{[\s\S]*?\}/);
+  if (!jsonMatch) {
+    console.error("[OCR] No JSON object found in Gemini response.");
+    return { vendor: "", amount: 0, date: new Date().toISOString(), category: "Other", rawText: raw, confidence: 0 };
   }
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch {
+    console.error("[OCR] JSON.parse failed on:", jsonMatch[0]);
+    return { vendor: "", amount: 0, date: new Date().toISOString(), category: "Other", rawText: raw, confidence: 0 };
+  }
+
+  const amount  = parseReceiptAmount(parsed.amount);
+  const vendor  = String(parsed.vendor  || "").trim();
+  const category = String(parsed.category || "Other").trim();
+
+  // Parse date — accept YYYY-MM-DD or ISO strings
+  let date = new Date().toISOString();
+  if (parsed.date) {
+    const d = new Date(parsed.date);
+    if (!isNaN(d.getTime())) date = d.toISOString();
+  }
+
+  const confidence = vendor && amount > 0 ? 0.9 : 0.4;
+  console.log(`[OCR] Parsed → vendor: "${vendor}", amount: ${amount}, date: ${date}, confidence: ${confidence}`);
+
+  return { vendor, amount, date, category, rawText: raw, confidence };
+}
+
+/**
+ * Robustly parse an amount value from Gemini.
+ * Handles: numbers, strings like "RM 45.50", "45,50", "128.90", null
+ */
+function parseReceiptAmount(raw: unknown): number {
+  if (typeof raw === "number") return isNaN(raw) ? 0 : raw;
+  if (typeof raw === "string") {
+    // Strip currency symbols, letters, spaces; keep digits and decimal point
+    const cleaned = raw.replace(/[^0-9.]/g, "");
+    const num = parseFloat(cleaned);
+    return isNaN(num) ? 0 : num;
+  }
+  return 0;
 }

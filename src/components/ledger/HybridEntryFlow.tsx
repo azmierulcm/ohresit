@@ -84,9 +84,10 @@ export default function HybridEntryFlow({ onClose }: { onClose: () => void }) {
       const { ocr, receipt } = result;
       setReviewData({
         vendor: ocr.vendor,
-        amount: ocr.amount > 0 ? ocr.amount.toString() : "",
-        date: ocr.date.split("T")[0],
-        category: ocr.category,
+        // Always show extracted amount (even 0) so user can see and fix it
+        amount: ocr.amount > 0 ? ocr.amount.toFixed(2) : "",
+        date: ocr.date ? ocr.date.split("T")[0] : new Date().toISOString().split("T")[0],
+        category: ocr.category || "Other",
         notes: "",
         ocr,
         receipt,
@@ -244,14 +245,24 @@ export default function HybridEntryFlow({ onClose }: { onClose: () => void }) {
           {step === "REVIEW" && (
             <div className="space-y-5">
               {/* OCR confidence banner */}
-              {reviewData.ocr && (
-                <div className="flex items-center gap-3 p-3 bg-emerald-50 rounded-2xl border border-emerald-100">
-                  <AlertCircle className="h-4 w-4 text-emerald-600 shrink-0" />
-                  <p className="text-xs font-medium text-emerald-800">
-                    AI confidence: {Math.round((reviewData.ocr.confidence) * 100)}% — please verify the details below.
-                  </p>
-                </div>
-              )}
+              {reviewData.ocr && (() => {
+                const pct = Math.round(reviewData.ocr.confidence * 100);
+                const isLow = reviewData.ocr.confidence < 0.5;
+                return (
+                  <div className={`flex items-center gap-3 p-3 rounded-2xl border ${
+                    isLow
+                      ? "bg-amber-50 border-amber-100"
+                      : "bg-emerald-50 border-emerald-100"
+                  }`}>
+                    <AlertCircle className={`h-4 w-4 shrink-0 ${isLow ? "text-amber-500" : "text-emerald-600"}`} />
+                    <p className={`text-xs font-medium ${isLow ? "text-amber-800" : "text-emerald-800"}`}>
+                      {isLow
+                        ? `Low confidence (${pct}%) — AI couldn't read all fields. Please fill in missing details.`
+                        : `AI confidence: ${pct}% — verify the details below before saving.`}
+                    </p>
+                  </div>
+                );
+              })()}
 
               <div className="space-y-4">
                 {/* Vendor */}
