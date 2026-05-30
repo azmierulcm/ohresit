@@ -13,8 +13,11 @@ export interface Transaction {
   userId: string;
   type: 'expense' | 'income';
   category: string;
-  amount: number;
-  date: any; // Firestore Timestamp
+  amount: number;           // always in MYR
+  currency?: string;        // ISO 4217 — original currency on receipt (e.g. "USD")
+  originalAmount?: number;  // amount in original currency before conversion
+  exchangeRate?: number;    // 1 [currency] = X MYR at time of entry
+  date: any;                // Firestore Timestamp
   vendor: string;
   description: string;
   receipt?: Receipt;

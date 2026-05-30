@@ -51,6 +51,11 @@ const TransactionItem = ({ tx }: { tx: Transaction }) => (
       <span className={`text-[16px] font-bold ${tx.type === 'expense' ? 'text-zinc-900' : 'text-emerald-600'}`}>
         {tx.type === 'expense' ? '-' : '+'} RM {tx.amount.toFixed(2)}
       </span>
+      {tx.currency && tx.currency !== 'MYR' && tx.originalAmount && (
+        <span className="text-[10px] text-zinc-400 font-medium">
+          {tx.currency} {tx.originalAmount.toFixed(2)}
+        </span>
+      )}
       {tx.compliance?.isVerified && (
         <span className="text-[9px] font-bold bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded uppercase tracking-wider">
           Verified

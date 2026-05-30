@@ -5,6 +5,8 @@ import { storage, db } from "@/lib/firebase/admin";
 import { nanoid } from "nanoid";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Receipt } from "@/types";
+import { convertToMYR } from "@/lib/utils/exchange-rate";
+import { parseReceiptAmount } from "@/lib/utils/receipt-parser";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
@@ -12,8 +14,11 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
 export interface OcrResult {
   vendor: string;
-  amount: number;
-  date: string;        // ISO string
+  amount: number;         // original amount in detected currency
+  currency: string;       // ISO 4217 code detected from receipt (e.g. "USD")
+  amountMYR: number;      // converted to MYR
+  exchangeRate: number;   // 1 [currency] = X MYR
+  date: string;           // ISO string
   category: string;
   rawText: string;
   confidence: number;
@@ -31,7 +36,10 @@ export interface AnalyzeResult {
 export interface SaveTransactionInput {
   userId: string;
   vendor: string;
-  amount: number;
+  amountMYR: number;        // MYR amount to save
+  originalAmount: number;   // amount in original currency
+  currency: string;         // ISO code
+  exchangeRate: number;
   date: string;
   category: string;
   notes: string;
@@ -55,13 +63,13 @@ export async function analyzeReceiptAction(
 
     const originalBuffer = Buffer.from(await file.arrayBuffer());
 
-    // Convert to JPEG for Gemini Vision (AVIF not supported; high quality for OCR accuracy)
+    // Convert to JPEG for Gemini (AVIF not supported; high quality for OCR)
     const jpegBuffer = await sharp(originalBuffer)
       .jpeg({ quality: 92 })
       .resize(2000, null, { withoutEnlargement: true })
       .toBuffer();
 
-    // Convert to AVIF for Firebase Storage (smaller, OCR-optimised)
+    // Convert to AVIF for Firebase Storage
     const avifBuffer = await sharp(originalBuffer)
       .avif({ quality: 50, effort: 4 })
       .resize(1600, null, { withoutEnlargement: true })
@@ -74,10 +82,7 @@ export async function analyzeReceiptAction(
 
     await fileRef.save(avifBuffer, {
       contentType: "image/avif",
-      metadata: {
-        cacheControl: "public, max-age=31536000",
-        userId,
-      },
+      metadata: { cacheControl: "public, max-age=31536000", userId },
     });
 
     const [downloadUrl] = await fileRef.getSignedUrl({
@@ -85,7 +90,7 @@ export async function analyzeReceiptAction(
       expires: "03-01-2500",
     });
 
-    // Run Gemini Vision OCR on the JPEG
+    // Run Gemini Vision OCR
     const ocr = await runGeminiOcr(jpegBuffer);
 
     return {
@@ -105,31 +110,30 @@ export async function saveTransactionAction(
   input: SaveTransactionInput
 ): Promise<{ success: true; transactionId: string } | { success: false; error: string }> {
   try {
-    const hasReceipt = !!input.receipt?.storagePath;
+    const amountMYR = parseReceiptAmount(input.amountMYR);
+    if (!amountMYR || amountMYR <= 0) {
+      return { success: false, error: "Amount must be greater than 0." };
+    }
 
+    const hasReceipt = !!input.receipt?.storagePath;
     const receiptData: Receipt | null = hasReceipt
       ? {
           storagePath: input.receipt.storagePath,
           downloadUrl: input.receipt.downloadUrl,
           format: "avif",
-          ocrMetadata: {
-            rawText: input.rawText,
-            confidence: input.confidence,
-          },
+          ocrMetadata: { rawText: input.rawText, confidence: input.confidence },
         }
       : null;
-
-    const amount = parseReceiptAmount(input.amount);
-    if (!amount || amount <= 0) {
-      return { success: false, error: "Amount must be greater than 0." };
-    }
 
     const transactionRef = db.collection("transactions").doc();
     const txData: any = {
       userId: input.userId,
       type: "expense",
       category: input.category,
-      amount,
+      amount: amountMYR,                              // always MYR
+      currency: input.currency || "MYR",
+      originalAmount: parseReceiptAmount(input.originalAmount) || amountMYR,
+      exchangeRate: input.exchangeRate || 1,
       date: new Date(input.date),
       vendor: input.vendor,
       description: input.notes || `${input.vendor} — ${input.category}`,
@@ -139,7 +143,6 @@ export async function saveTransactionAction(
     if (receiptData) txData.receipt = receiptData;
 
     await transactionRef.set(txData);
-
     return { success: true, transactionId: transactionRef.id };
   } catch (error: any) {
     console.error("saveTransactionAction error:", error);
@@ -150,26 +153,37 @@ export async function saveTransactionAction(
 // ─── Gemini Vision OCR ───────────────────────────────────────────────────────
 
 async function runGeminiOcr(jpegBuffer: Buffer): Promise<OcrResult> {
+  const empty: OcrResult = {
+    vendor: "", amount: 0, currency: "MYR", amountMYR: 0,
+    exchangeRate: 1, date: new Date().toISOString(), category: "Other",
+    rawText: "", confidence: 0,
+  };
+
   if (!process.env.GEMINI_API_KEY) {
     console.warn("[OCR] GEMINI_API_KEY not set — skipping OCR.");
-    return { vendor: "", amount: 0, date: new Date().toISOString(), category: "Other", rawText: "", confidence: 0 };
+    return empty;
   }
 
   const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
   const today = new Date().toISOString().split("T")[0];
 
-  // ── Prompt: no rawText (causes JSON parse failures with literal newlines) ──
-  const prompt = `You are reading a Malaysian receipt or invoice image.
+  const prompt = `You are reading a receipt or invoice from anywhere in the world.
 
 Return ONLY a JSON object — no markdown, no explanation, nothing else.
 
-Example:
-{"vendor":"Village Grocer","amount":45.50,"date":"2026-05-30","category":"Food & Drink"}
+Examples:
+{"vendor":"Starbucks","amount":8.50,"currency":"USD","date":"2026-05-30","category":"Food & Drink"}
+{"vendor":"Village Grocer","amount":45.50,"currency":"MYR","date":"2026-05-30","category":"Food & Drink"}
+{"vendor":"Bic Camera","amount":3200,"currency":"JPY","date":"2026-05-30","category":"Shopping"}
 
 Rules:
-- vendor: store or restaurant name (largest text, usually at top)
-- amount: the final TOTAL / JUMLAH / GRAND TOTAL as a plain decimal number. Strip "RM". Example: if you see "RM 128.90" write 128.90
-- date: date printed on receipt in YYYY-MM-DD. Write ${today} if not visible
+- vendor: store or business name (usually largest text at top)
+- amount: the final TOTAL / GRAND TOTAL as a plain decimal number, no symbols
+- currency: ISO 4217 code detected from the receipt symbol or text.
+  Common mappings — RM/Ringgit→MYR, $→USD (unless context says AUD/SGD/CAD/HKD), €→EUR, £→GBP,
+  S$→SGD, A$→AUD, C$→CAD, HK$→HKD, ¥/円→JPY, 元/CNY→CNY, ₩→KRW, ฿→THB, Rp→IDR, ₹→INR
+  Default to MYR if currency is ambiguous.
+- date: date on receipt in YYYY-MM-DD. Write ${today} if not visible
 - category: exactly one of — Food & Drink, Transport, Utilities, Shopping, Healthcare, Entertainment, Software, Other`;
 
   const result = await model.generateContent([
@@ -180,11 +194,10 @@ Rules:
   const raw = result.response.text().trim();
   console.log("[OCR] Gemini raw response:", raw.substring(0, 300));
 
-  // Use regex to find the first {...} block — handles markdown fences and trailing text
   const jsonMatch = raw.match(/\{[\s\S]*?\}/);
   if (!jsonMatch) {
-    console.error("[OCR] No JSON object found in Gemini response.");
-    return { vendor: "", amount: 0, date: new Date().toISOString(), category: "Other", rawText: raw, confidence: 0 };
+    console.error("[OCR] No JSON found in Gemini response.");
+    return { ...empty, rawText: raw };
   }
 
   let parsed: any;
@@ -192,37 +205,40 @@ Rules:
     parsed = JSON.parse(jsonMatch[0]);
   } catch {
     console.error("[OCR] JSON.parse failed on:", jsonMatch[0]);
-    return { vendor: "", amount: 0, date: new Date().toISOString(), category: "Other", rawText: raw, confidence: 0 };
+    return { ...empty, rawText: raw };
   }
 
-  const amount  = parseReceiptAmount(parsed.amount);
-  const vendor  = String(parsed.vendor  || "").trim();
+  const amount   = parseReceiptAmount(parsed.amount);
+  const vendor   = String(parsed.vendor   || "").trim();
   const category = String(parsed.category || "Other").trim();
+  const currency = String(parsed.currency || "MYR").toUpperCase().trim();
 
-  // Parse date — accept YYYY-MM-DD or ISO strings
   let date = new Date().toISOString();
   if (parsed.date) {
     const d = new Date(parsed.date);
     if (!isNaN(d.getTime())) date = d.toISOString();
   }
 
-  const confidence = vendor && amount > 0 ? 0.9 : 0.4;
-  console.log(`[OCR] Parsed → vendor: "${vendor}", amount: ${amount}, date: ${date}, confidence: ${confidence}`);
-
-  return { vendor, amount, date, category, rawText: raw, confidence };
-}
-
-/**
- * Robustly parse an amount value from Gemini.
- * Handles: numbers, strings like "RM 45.50", "45,50", "128.90", null
- */
-function parseReceiptAmount(raw: unknown): number {
-  if (typeof raw === "number") return isNaN(raw) ? 0 : raw;
-  if (typeof raw === "string") {
-    // Strip currency symbols, letters, spaces; keep digits and decimal point
-    const cleaned = raw.replace(/[^0-9.]/g, "");
-    const num = parseFloat(cleaned);
-    return isNaN(num) ? 0 : num;
+  // Fetch live exchange rate and convert to MYR
+  let amountMYR = amount;
+  let exchangeRate = 1;
+  if (currency !== "MYR" && amount > 0) {
+    try {
+      const fx = await convertToMYR(amount, currency);
+      amountMYR = fx.amountMYR;
+      exchangeRate = fx.rate;
+      console.log(`[OCR] ${amount} ${currency} → RM ${amountMYR} (rate: ${exchangeRate})`);
+    } catch (fxErr) {
+      console.warn("[OCR] Exchange rate fetch failed, using original amount as MYR:", fxErr);
+      amountMYR = amount;
+      exchangeRate = 1;
+    }
   }
-  return 0;
+
+  const confidence = vendor && amount > 0 ? 0.9 : 0.4;
+  console.log(`[OCR] → vendor: "${vendor}", ${amount} ${currency} = RM ${amountMYR}`);
+
+  return { vendor, amount, currency, amountMYR, exchangeRate, date, category, rawText: raw, confidence };
 }
+
+// parseReceiptAmount is imported from @/lib/utils/receipt-parser
