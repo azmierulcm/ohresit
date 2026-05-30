@@ -111,12 +111,16 @@ export default function ReceiptVault() {
                     src={receipt.receipt.downloadUrl}
                     alt={receipt.vendor}
                     className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    onError={(e) => {
+                      const target = e.currentTarget;
+                      target.style.display = "none";
+                      target.nextElementSibling?.classList.remove("hidden");
+                    }}
                   />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center">
-                    <ImageOff className="h-10 w-10 text-zinc-300" />
-                  </div>
-                )}
+                ) : null}
+                <div className={`w-full h-full flex items-center justify-center${receipt.receipt?.downloadUrl ? " hidden" : ""}`}>
+                  <ImageOff className="h-10 w-10 text-zinc-300" />
+                </div>
                 <div className="absolute top-4 right-4">
                   <span className={`px-3 py-1 rounded-full text-[10px] font-bold shadow-sm ${
                     receipt.compliance?.isVerified ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'
