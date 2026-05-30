@@ -23,6 +23,7 @@ type Step = "CHOOSE" | "SCANNING" | "REVIEW";
 type Mode = "scan" | "manual";
 
 interface ReviewData {
+  type: 'expense' | 'income';
   vendor: string;
   amountMYR: string;      // editable MYR amount (what gets saved)
   originalAmount: string; // original currency amount (read-only reference)
@@ -52,6 +53,7 @@ export default function HybridEntryFlow({ onClose }: { onClose: () => void }) {
   const [saving, setSaving] = useState(false);
   const [fetchingRate, setFetchingRate] = useState(false);
   const [reviewData, setReviewData] = useState<ReviewData>({
+    type: "expense",
     vendor: "",
     amountMYR: "",
     originalAmount: "",
@@ -79,6 +81,7 @@ export default function HybridEntryFlow({ onClose }: { onClose: () => void }) {
 
       const { ocr, receipt } = result;
       setReviewData({
+        type: "expense",
         vendor: ocr.vendor,
         amountMYR: ocr.amountMYR > 0 ? ocr.amountMYR.toFixed(2) : "",
         originalAmount: ocr.amount > 0 ? ocr.amount.toFixed(2) : "",
@@ -99,7 +102,7 @@ export default function HybridEntryFlow({ onClose }: { onClose: () => void }) {
 
   const fallbackToManualReview = () => {
     setReviewData({
-      vendor: "", amountMYR: "", originalAmount: "", currency: "MYR",
+      type: "expense", vendor: "", amountMYR: "", originalAmount: "", currency: "MYR",
       exchangeRate: 1, date: new Date().toISOString().split("T")[0],
       category: "Other", notes: "",
     });
@@ -115,7 +118,7 @@ export default function HybridEntryFlow({ onClose }: { onClose: () => void }) {
   const handleManualEntry = () => {
     setMode("manual");
     setReviewData({
-      vendor: "", amountMYR: "", originalAmount: "", currency: "MYR",
+      type: "expense", vendor: "", amountMYR: "", originalAmount: "", currency: "MYR",
       exchangeRate: 1, date: new Date().toISOString().split("T")[0],
       category: "Food & Drink", notes: "",
     });
@@ -175,6 +178,7 @@ export default function HybridEntryFlow({ onClose }: { onClose: () => void }) {
     try {
       const result = await saveTransactionAction({
         userId: user?.uid || "",
+        type: reviewData.type,
         vendor: reviewData.vendor,
         amountMYR: parseReceiptAmount(reviewData.amountMYR),
         originalAmount: parseReceiptAmount(reviewData.originalAmount) || parseReceiptAmount(reviewData.amountMYR),
@@ -321,6 +325,26 @@ export default function HybridEntryFlow({ onClose }: { onClose: () => void }) {
               )}
 
               <div className="space-y-4">
+                {/* Expense / Income toggle */}
+                <div className="grid grid-cols-2 gap-2 p-1 bg-zinc-100 rounded-2xl">
+                  {(["expense", "income"] as const).map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => updateField("type", t)}
+                      className={`h-11 rounded-xl font-bold text-sm capitalize transition-all ${
+                        reviewData.type === t
+                          ? t === "expense"
+                            ? "bg-white text-red-600 shadow-sm"
+                            : "bg-white text-emerald-600 shadow-sm"
+                          : "text-zinc-400 hover:text-zinc-600"
+                      }`}
+                    >
+                      {t === "expense" ? "− Expense" : "+ Income"}
+                    </button>
+                  ))}
+                </div>
+
                 {/* Vendor */}
                 <div>
                   <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest ml-1">Vendor</label>

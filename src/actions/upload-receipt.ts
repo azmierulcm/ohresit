@@ -35,6 +35,7 @@ export interface AnalyzeResult {
 
 export interface SaveTransactionInput {
   userId: string;
+  type: 'expense' | 'income';
   vendor: string;
   amountMYR: number;        // MYR amount to save
   originalAmount: number;   // amount in original currency
@@ -126,9 +127,13 @@ export async function saveTransactionAction(
       : null;
 
     const transactionRef = db.collection("transactions").doc();
+    if (!input.userId) {
+      return { success: false, error: "User not authenticated. Please sign in again." };
+    }
+
     const txData: any = {
       userId: input.userId,
-      type: "expense",
+      type: input.type || "expense",
       category: input.category,
       amount: amountMYR,                              // always MYR
       currency: input.currency || "MYR",
