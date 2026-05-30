@@ -164,7 +164,7 @@ async function runGeminiOcr(jpegBuffer: Buffer): Promise<OcrResult> {
     return empty;
   }
 
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
   const today = new Date().toISOString().split("T")[0];
 
   const prompt = `You are reading a receipt or invoice from anywhere in the world.
