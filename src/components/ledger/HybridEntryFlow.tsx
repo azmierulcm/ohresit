@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import {
   X,
   Camera,
+  ImageUp,
   PenLine,
   Check,
   ChevronRight,
@@ -186,12 +187,14 @@ export default function HybridEntryFlow({ onClose }: { onClose: () => void }) {
           {/* ── STEP 1: CHOOSE ──────────────────────────────────────────── */}
           {step === "CHOOSE" && (
             <div className="grid grid-cols-1 gap-4">
-              {/* Smart Scan */}
+
+              {/* Take Photo — opens camera directly */}
               <label className="relative flex items-center justify-between p-6 bg-emerald-50 rounded-[2rem] border-2 border-emerald-100 cursor-pointer active:scale-[0.98] transition-all group">
                 <input
                   type="file"
                   className="hidden"
                   accept="image/*"
+                  capture="environment"
                   onChange={handleFileUpload}
                 />
                 <div className="flex items-center gap-4">
@@ -199,11 +202,31 @@ export default function HybridEntryFlow({ onClose }: { onClose: () => void }) {
                     <Camera className="h-6 w-6" />
                   </div>
                   <div>
-                    <p className="font-bold text-emerald-900 text-lg">Smart Scan</p>
-                    <p className="text-emerald-700/70 text-sm">AI reads your receipt</p>
+                    <p className="font-bold text-emerald-900 text-lg">Take Photo</p>
+                    <p className="text-emerald-700/70 text-sm">Open camera &amp; scan receipt</p>
                   </div>
                 </div>
                 <ChevronRight className="h-6 w-6 text-emerald-400 group-hover:translate-x-1 transition-transform" />
+              </label>
+
+              {/* Upload from Gallery — file picker / library */}
+              <label className="relative flex items-center justify-between p-6 bg-sky-50 rounded-[2rem] border-2 border-sky-100 cursor-pointer active:scale-[0.98] transition-all group">
+                <input
+                  type="file"
+                  className="hidden"
+                  accept="image/*"
+                  onChange={handleFileUpload}
+                />
+                <div className="flex items-center gap-4">
+                  <div className="w-14 h-14 bg-sky-500 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-sky-200">
+                    <ImageUp className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-sky-900 text-lg">Upload Photo</p>
+                    <p className="text-sky-700/70 text-sm">Choose from gallery or files</p>
+                  </div>
+                </div>
+                <ChevronRight className="h-6 w-6 text-sky-400 group-hover:translate-x-1 transition-transform" />
               </label>
 
               {/* Manual Entry */}
